@@ -1,0 +1,1240 @@
+
+
+function ctrreturn = createTablerow(ctrlabel, ctrvalue, ctrrow, ctrcolumn);
+    h = annotation('textbox', [0, 0, 0, 0], 'string', ctrlabel);
+    h.Units = "pixels";
+    h.Position = [650, 650 - ctrrow*25, 150, 25];
+    h = annotation('textbox', [0, 0, 0, 0], 'string', ctrvalue);
+    h.Units = "pixels";
+    h.Position = [800+ctrcolumn*50, 650 - ctrrow*25, 50, 25];
+end
+
+
+
+
+test_type = input("What kind of test? (0 = triaxial, 1 = biaxial)")
+
+comparison_amount = input("How many tests to plot? (1 = normal, single test plot, 2 or more = comparison between tests)")
+
+%if comparison_amount > 1
+    disp("Do not close the figure that just opened; this will be used to plot data.")
+    figure;
+    tcl=tiledlayout(3, 3);
+%end 
+
+if test_type == 0
+
+    comparison_i = 0;
+
+    while comparison_i < comparison_amount
+        disp("Choose a GDS data file...")
+        file = uigetfile;
+        DataTable = readtable(file);%triaxialhutchinsondense
+    
+        read_from_file = input("Read an input parameter file or start from scratch? (0 = read a file, 1 = do not)");
+    
+        %fileparts(file)
+    
+        if read_from_file == 0
+            disp("Choose a .mat input parameter file...")
+            file = uigetfile('*.mat');
+            load(file, 'input_array');
+            test_ID = input_array(1);
+            sample_height = input_array(2);
+            sample_diameter_w_membrane = input_array(3);
+            sample_membrane_thickness = input_array(4);%input("What is the membrane thickness in mm? (typical values are 0.635 mm for thick and 0.3048 mm for thin)");
+            consolidation_number_of_stages = input_array(5);
+        else 
+            test_ID = input("What is the test id? (unique number that identifies the test)");
+            sample_height = input("What is the sample height in mm?");
+            sample_diameter_w_membrane = input("What is the sample diameter in mm?");
+            sample_membrane_thickness = input("What is the membrane thickness in mm? (typical values are 0.635 mm for thick and 0.3048 mm for thin)");
+            consolidation_number_of_stages = input("How many consolidation stages?");
+            input_array = [test_ID, sample_height, sample_diameter_w_membrane, sample_membrane_thickness, consolidation_number_of_stages];
+        end 
+    
+        % if comparison_amount == 1
+        %     disp("Do not close the figure that just opened; this will be used to plot data.")
+        %     figure;
+        %     %fig = uifigure;
+        %     tcl=tiledlayout(3, 3);
+        % end 
+
+        sample_diameter = sample_diameter_w_membrane - (sample_membrane_thickness*2);
+
+        sample_height_preshear = sample_height;
+        sample_volume = 3.14159*(sample_diameter/2)*(sample_diameter/2)*sample_height/1000;
+        sample_volume_preshear = sample_volume;  %PI()*(B57/2)^2*B56/1000;
+        
+    
+        j = 0 ;
+        while(j < consolidation_number_of_stages)
+    
+            if read_from_file == 0
+                consolidation_stage = input_array(6+j*5);%input("What stage number was consolidation " + string(j + 1) + "?")
+                %issue with saving/loading these two values...
+                consolidation_time = input_array(7+j*5);%input("How many seconds into the stage until consolidation starts? (Enter '0' to use the entire stage)")
+                slope_i_input = input_array(8+j*5);%input("How many seconds to use to find slope of tangent line? (minimum 2. typical value is 5 seconds)")
+                consolidation_autodock = input_array(9+j*5);%input("Is autodocking on? (0 = no, 1 = yes)")
+                consolidation_sampling_rate = input_array(10+j*5);
+            else 
+                consolidation_stage = input("What stage number was consolidation " + string(j + 1) + "?");
+                consolidation_time = input("How many seconds into the stage until consolidation starts? (Enter '0' to use the entire stage. Enter '-1' to automatically find value that generates the steepest t90 slope.)");
+                slope_i_input = input("How many seconds to use to find slope of tangent line? (minimum 2. Enter '-1' to automatically find value that generates the steepest t90 slope.)");
+                consolidation_autodock = input("Is autodocking on? (0 = no, 1 = yes)");
+                consolidation_sampling_rate = input("What is the sampling rate for consolidation? (1 second is a good rate to use)");
+                input_array(end+1) = consolidation_stage;
+                %input_array(end+1) = consolidation_time;
+                %input_array(end+1) = slope_i_input;
+                %input_array(end+1) = consolidation_autodock;
+            end
+    
+
+    
+    
+            
+            ConsolidationTable2 = DataTable(DataTable.StageNumber == consolidation_stage, :);
+    
+            i = 1;
+    
+            if consolidation_autodock == 1
+                while( abs(ConsolidationTable2.AxialDisplacement_mm_(i + 1) - ConsolidationTable2.AxialDisplacement_mm_(i)) < 0.1);
+                    i = i + 1;
+                end
+            end
+    
+            consolidationtable2_autodock_value = i;
+    
+            best_t90 = 99999999;
+            best_l = 0;
+            best_slope_i = 0;
+    
+            if consolidation_time == -1
+                l = 1;
+                l_target = 10;
+
+                while l < l_target %%for each possible consolidation_time...
+                    disp('Running iteration ' + string(l) + " of " + string(l_target) + "...")
+               
+                    ConsolidationTable = ConsolidationTable2([consolidationtable2_autodock_value+l+1:height(ConsolidationTable2)],:);
+        
+        
+                    if slope_i_input == -1
+                        slope_i = 4; %minimum number of points to get slope over; autofinder skips 2 and 3 due to accuracy concerns, which is why some parts of the graph may look steeper
+                        slope_i_target = 10; %maximum number of points to get slope over
+                    else
+                        slope_i = slope_i_input;
+                        slope_i_target = slope_i + 1;
+                    end 
+        
+                    while slope_i < slope_i_target
+                        i = 1;
+                        initial_i = i;
+                        slope_y2 = sample_volume_preshear + (ConsolidationTable.BackVolume_mm__(slope_i) - ConsolidationTable.BackVolume_mm__(initial_i))/1000;
+                        slope_y1 = sample_volume_preshear;
+                        slope = (slope_y2 - slope_y1)/(sqrt(slope_i-1) - sqrt(initial_i-1));
+        
+                        while(i < height(ConsolidationTable) + 1);
+                            %sqrt time
+                            ConsolidationTable.TimeSinceStartOfStage_s_(i) = sqrt(i - 1);
+                            %height change
+                            ConsolidationTable.L_CVolume_mm__(i) = sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(initial_i);
+                            %volume change
+                            ConsolidationTable.LocalAxial1_mm_(i) = sample_volume_preshear + (ConsolidationTable.BackVolume_mm__(i) - ConsolidationTable.BackVolume_mm__(initial_i))/1000; 
+                            %area
+                            ConsolidationTable.LocalAxial2_mm_(i) = ConsolidationTable.LocalAxial1_mm_(i)*1000/ConsolidationTable.L_CVolume_mm__(i);
+                            %tangent line
+                            ConsolidationTable.LocalRadial_mm_(i) = ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope;
+                            %t90 line
+                            ConsolidationTable.BasePressure_kPa_(i) = ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                            i = i + 1;
+                        end
+                        
+                        i = i - 1;
+                
+                        sample_area_preshear = ConsolidationTable.LocalAxial2_mm_(i); %all that matters is that this takes the end-most area of the last consolidation stage
+                        %%go backwards from the end of the graph to the start to find POI
+                        %%of t90 line.
+                
+                        i = i - 1;
+        
+                        t90 = 0;
+                
+                        while(i > 0);
+                
+                            if ConsolidationTable.BasePressure_kPa_(i) > ConsolidationTable.LocalAxial1_mm_(i)
+                                t90 = 0.5*(ConsolidationTable.TimeSinceStartOfStage_s_(i)*ConsolidationTable.TimeSinceStartOfStage_s_(i) + ConsolidationTable.TimeSinceStartOfStage_s_(i+1)*ConsolidationTable.TimeSinceStartOfStage_s_(i+1));
+                                calculated_shear_rate = 4*60/(10*t90);
+                                i = 1;
+                            else 
+                                %t90 line
+                                ConsolidationTable.BasePressure_kPa_(i+1) = "";%ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                                %tangent line
+                                ConsolidationTable.LocalRadial_mm_(i+1) = "";
+                            end 
+                            i = i - 1;
+                        end
+        
+                        if t90 < best_t90
+                            best_t90 = t90;
+                            best_l = l;
+                            best_slope_i = slope_i;
+        
+                        end
+        
+                        slope_i = slope_i + 1;
+                    end
+        
+                    l = l + 1;
+                end
+            else 
+                best_l = consolidation_time;
+                best_slope_i = slope_i_input;
+            end 
+    
+            %l = 0
+            
+    
+            disp(string(best_l)) %best_l is the number of seconds to trim from the start of consolidation time
+            disp(string(best_slope_i)) %best_slope_i is the number of seconds to get the slope over- essentially the 'run' of 'slope = rise over run'
+    
+            %using best t90 parameters, generate the final set of data;
+            %this is the ACTUAL data that is relevant; all the rest is just
+            %to find the best t90 parameters.
+
+            %NOTE: sometimes the values given in matlab for height, volume,
+            %etc will differ slightly from excel values in dropbox. This is
+            %ok. excel files may contain parts that are trimmed slightly;
+            %matlab code uses 100% of the height change for consolidation,
+            %which will give more accurate values.
+
+            %takes values from before best_l in order to accurately get
+            %height change, but time change only starts at t = best_l
+            %ConsolidationTable = ConsolidationTable2([consolidationtable2_autodock_value+best_l+1:height(ConsolidationTable2)],:);
+            %ConsolidationTable_extra = ConsolidationTable2([consolidationtable2_autodock_value+0+1:height(ConsolidationTable2)],:);
+            ConsolidationTable = ConsolidationTable2([consolidationtable2_autodock_value+0+1:height(ConsolidationTable2)],:);
+            slope_i = best_slope_i + best_l;
+    
+            i = 1;
+            initial_i = best_l+1;
+            slope_y2 = sample_volume_preshear + (ConsolidationTable.BackVolume_mm__(slope_i) - ConsolidationTable.BackVolume_mm__(initial_i))/1000;
+            slope_y1 = sample_volume_preshear;
+            slope = (slope_y2 - slope_y1)/(sqrt(best_slope_i)); %its complicated why 'best_slope_i' is used here, basically its cause the table still having pre-consol values messes up sqrts
+            %is this why there are issues with saving/loading?
+    
+            while(i < height(ConsolidationTable) + 1)
+
+                %height change
+                ConsolidationTable.L_CVolume_mm__(i) = sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(1);
+                %volume change
+                ConsolidationTable.LocalAxial1_mm_(i) = sample_volume_preshear + (ConsolidationTable.BackVolume_mm__(i) - ConsolidationTable.BackVolume_mm__(1))/1000;  %sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(1);
+                %vol change, for graphing (starts at 0)
+                ConsolidationTable.BaseVolume_mm__(i) = (ConsolidationTable.BackVolume_mm__(i) - ConsolidationTable.BackVolume_mm__(1))/1000;  %sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(1);
+                %area
+                ConsolidationTable.LocalAxial2_mm_(i) = ConsolidationTable.LocalAxial1_mm_(i)*1000/ConsolidationTable.L_CVolume_mm__(i);
+
+                %sqrt time
+                if (i - 1 - best_l) > -1
+                    %sqrt time
+                    ConsolidationTable.TimeSinceStartOfStage_s_(i) = sqrt(i - 1 - best_l);
+                    %tangent line
+                    ConsolidationTable.LocalRadial_mm_(i) = ConsolidationTable.BaseVolume_mm__(initial_i) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope;
+                    %t90 line
+                    ConsolidationTable.BasePressure_kPa_(i) = ConsolidationTable.BaseVolume_mm__(initial_i) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                else 
+                    ConsolidationTable.TimeSinceStartOfStage_s_(i) = 0;
+                    ConsolidationTable.LocalRadial_mm_(i) = 0;%sample_volume_preshear;%ConsolidationTable.LocalAxial1_mm_(initial_i)
+                    ConsolidationTable.BasePressure_kPa_(i) = 0;%sample_volume_preshear;%ConsolidationTable.LocalAxial1_mm_(initial_i)
+                end 
+                i = i + 1;
+            end
+            
+            i = i - 1;
+    
+            sample_area_preshear = ConsolidationTable.LocalAxial2_mm_(i); %all that matters is that this takes the end-most values of the last consolidation stage
+            sample_height_preshear = ConsolidationTable.L_CVolume_mm__(i);
+            sample_volume_preshear = ConsolidationTable.LocalAxial1_mm_(i);
+            %does diameter change? is this relevant?
+            
+            % disp(string(sample_height_preshear) + " height " + string(ConsolidationTable.L_CVolume_mm__(i)) + " " + ConsolidationTable.AxialDisplacement_mm_(i) + " " + ConsolidationTable.AxialDisplacement_mm_(1))
+            % disp(string(sample_volume_preshear) + " volume " + string(ConsolidationTable.LocalAxial1_mm_(i)) + " " + ConsolidationTable.LocalAxial1_mm_(i) + " " + ConsolidationTable.LocalAxial1_mm_(1))
+            % 
+            %sample_height_preshear = ConsolidationTable.L_CVolume_mm__(i)
+            %sample_volume_preshear
+            
+            
+            
+            %%go backwards from the end of the graph to the start to find POI
+            %%of t90 line.
+    
+            t90 = 0;
+    
+            i = i - 1;
+    
+            while(i > 0);
+    
+                if ConsolidationTable.BasePressure_kPa_(i) > ConsolidationTable.BaseVolume_mm__(i)
+                    t90 = 0.5*(ConsolidationTable.TimeSinceStartOfStage_s_(i)*ConsolidationTable.TimeSinceStartOfStage_s_(i) + ConsolidationTable.TimeSinceStartOfStage_s_(i+1)*ConsolidationTable.TimeSinceStartOfStage_s_(i+1));
+                    calculated_shear_rate = 4*60/(10*t90);
+                    i = 1;
+                    %after getting to the point of intersection, exit the
+                    %loop
+                else 
+                    %clear the parts of the tangent lines that are below
+                    %the graph
+                    %t90 line
+                    ConsolidationTable.BasePressure_kPa_(i+1) = "";%ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                    %tangent line
+                    ConsolidationTable.LocalRadial_mm_(i+1) = "";
+                end 
+                i = i - 1;
+            end
+    
+
+        
+
+            disp("For this consolidation stage, calculated maximum shear rate is " + string(calculated_shear_rate) + " mm/min and t90 is " + string(t90) + " seconds.")
+
+    
+            
+    
+    
+    
+            
+
+    
+            if read_from_file == 0
+
+            else 
+                input_array(end+1) = best_l;
+                input_array(end+1) = best_slope_i;
+                input_array(end+1) = consolidation_autodock;
+                input_array(end+1) = consolidation_sampling_rate;
+            end
+    
+    
+            
+    
+    
+    
+    
+    
+    
+            %if comparison_amount == 1
+
+
+            %end
+            %close
+    
+            j = j + 1;
+        end
+    
+        
+        nexttile(1);
+        hold on
+        if comparison_amount == 1
+            plot(ConsolidationTable, "TimeSinceStartOfStage_s_", ["BaseVolume_mm__", "LocalRadial_mm_", "BasePressure_kPa_"])
+        else
+            
+            plot(ConsolidationTable, "TimeSinceStartOfStage_s_", "BaseVolume_mm__", 'DisplayName','Test ' + string(test_ID))
+            legend
+        end 
+        xlabel('Square Root of Time (s^1^/^2)');
+        ylabel('Volume Change (mm^3)');
+        title('Consolidation Graph');
+
+        %savefig('Consol' + string(j) + '.fig')
+
+
+    %disp(string(sample_height_preshear))% + " height " + string(ConsolidationTable.L_CVolume_mm__(i)) + " " + ConsolidationTable.AxialDisplacement_mm_(i) + " " + ConsolidationTable.AxialDisplacement_mm_(1))
+    %disp(string(sample_volume_preshear))
+
+            if read_from_file == 0
+                shear_stage = input_array(end-10);
+                shear_autodock = input_array(end-9);
+            else 
+                shear_stage = input("What stage number was shear?");% + string(sample_height_preshear))
+                shear_autodock = input("Is autodocking on? (0 = no, 1 = yes)");
+                shear_sampling_rate = input("What is the sampling rate for shear? (1 second is a good rate to use)");
+                input_array(end+1) = shear_stage;
+                input_array(end+1) = shear_autodock;
+            end
+    
+    
+            ShearTable = DataTable(DataTable.StageNumber == shear_stage, :);
+    
+            if shear_autodock == 1
+                i = 1;
+                while( abs(ShearTable.AxialDisplacement_mm_(i + 1) - ShearTable.AxialDisplacement_mm_(i)) < 0.1);
+                    i = i + 1;
+                end
+                ShearTable = ShearTable([i+1:height(ShearTable)],:);
+            end
+
+           
+            
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        %scatter(ShearTable, "AxialDisplacement_mm_", "PorePressure_kPa_")
+        %savefig('PorePressure.fig')
+        %scatter(ShearTable, "AxialDisplacement_mm_", "LoadCell_kN_")
+        %savefig('LoadCell.fig')
+    
+      %  original_pore_pressure = ShearTable.PorePressure_kPa_(1);
+        
+      %????????????????????????????????????????
+        % sample_height_preshear = 97.34
+        % sample_area_preshear = 2004.0
+        % sample_volume_preshear = 195.06
+
+        maxload = 0
+        area_at_maxload = 0
+        cell_pressure = 0
+    
+        i = 1;
+        while(i < height(ShearTable) + 1)
+            %ShearTable.AxialDisplacement_mm_(i) = ShearTable.AxialDisplacement_mm_(i)/sample_height_preshear;
+            %ShearTable.AxialDisplacement_mm_(i) = ShearTable.PorePressure_kPa_(i) - original_pore_pressure;
+            %%height
+            ShearTable.L_CPressure_kPa_(i) = sample_height_preshear - ShearTable.AxialDisplacement_mm_(i) + ShearTable.AxialDisplacement_mm_(1);
+            %strain
+            ShearTable.L_CVolume_mm__(i) = -100*(ShearTable.L_CPressure_kPa_(i) - ShearTable.L_CPressure_kPa_(1))/sample_height_preshear;
+            %area
+            ShearTable.LocalAxial1_mm_(i) = sample_area_preshear/(1 - ShearTable.L_CVolume_mm__(i)/100);
+            %sigma 3'
+            ShearTable.LocalAxial2_mm_(i) = ShearTable.RadialPressure_kPa_(i) - ShearTable.PorePressure_kPa_(i);
+            %sigma 1'
+            ShearTable.LocalRadial_mm_(i) = 1000000*(ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000 + ShearTable.LoadCell_kN_(i))/ShearTable.LocalAxial1_mm_(i) - ShearTable.PorePressure_kPa_(i);
+            %difference in sigma 3' and sigma 1'
+            ShearTable.BasePressure_kPa_(i) = ShearTable.LocalRadial_mm_(i) - ShearTable.LocalAxial2_mm_(i);
+            %difference in pore pressure
+            ShearTable.BaseVolume_mm__(i) = ShearTable.PorePressure_kPa_(i) - ShearTable.PorePressure_kPa_(1);
+    
+            if ShearTable.BasePressure_kPa_(i) > maxload
+                maxload = ShearTable.BasePressure_kPa_(i);
+                %area_at_maxload = ShearTable.LocalAxial1_mm_(i)/1000000
+                cell_pressure = ShearTable.RadialPressure_kPa_(i);
+            end 
+
+
+            %sigma 1'/sigma 3'
+            ShearTable.BackDifferentialPressure_kPa_(i) = ShearTable.LocalRadial_mm_(i)/ShearTable.LocalAxial2_mm_(i);%(1000000*ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000)/ShearTable.LocalAxial1_mm_(i);
+           
+            
+            %mean effective stress
+            ShearTable.AxialDisplacement2_mm_(i) = (2*ShearTable.LocalRadial_mm_(i) + ShearTable.LocalAxial2_mm_(i))/3;%(ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000);
+    
+            i = i + 1;
+        end
+    
+
+    
+       
+    
+        %disp(ShearTable)
+    
+    
+        % scatter(ShearTable, "L_CVolume_mm__", "LocalAxial2_mm_")
+        % savefig('sigma3.fig')
+        % scatter(ShearTable, "L_CVolume_mm__", "LocalRadial_mm_")
+        % savefig('sigma1.fig')
+    
+       % tiledlayout(2, 3)
+        %if comparison_amount == 1
+            
+            nexttile(2);
+            hold on;
+            plot(ShearTable, "L_CVolume_mm__", "BasePressure_kPa_");
+            %line("L_CVolume_mm__", "BasePressure_kPa_")
+            xlabel('Vertical Strain (%)');
+            ylabel('Deviator Stress (kPa)');
+            title('Deviator Stress vs Vertical Strain');
+            savefig('sigma_difference.fig')
+            %close
+            
+            nexttile(4);
+            hold on;
+            plot(ShearTable, "L_CVolume_mm__", "BaseVolume_mm__");
+            xlabel('Vertical Strain (%)');
+            ylabel('Pore Pressure Change (kPa)');
+            title('Pore Pressure Change vs Vertical Strain');
+            savefig('pore pressure.fig')
+            %close
+           
+            nexttile(5);
+            hold on;
+            plot(ShearTable, "L_CVolume_mm__", "BackDifferentialPressure_kPa_");
+            xlabel('Vertical Strain (%)');
+            ylabel('Sigma 1/Sigma 3 (-)');
+            title('Stress Ratio vs Vertical Strain');
+            savefig('sigma ratio.fig')
+            %close
+            
+            nexttile(7);
+            hold on;
+            plot(ShearTable, "AxialDisplacement2_mm_", "BasePressure_kPa_");
+            xlabel('Mean Effective Stress (kPa)');
+            ylabel('Deviator Stress (kPa)');
+            title('P-Q diagram');
+            savefig('pq plot.fig')
+
+            %for mohrs circle:
+            point1 = cell_pressure;
+            point2 = cell_pressure + maxload;%/area_at_maxload
+            radius = (point2 - point1)/2;
+            centerx = (point1 + point2)/2 ;
+
+            th = 0:pi/50:2*pi;
+            xunit = radius * cos(th) + centerx;
+            yunit = radius * sin(th) + 0;
+
+            %to find tangent line...
+            % start with a slope of infinity
+            %gradually decrease slope
+            %for each point on line...
+                %if point y coordanite is less than y coord of circle
+                    %this line is tangent line.
+
+
+            
+            tangentslope = 0;
+            tangenti = 10;
+            while tangenti > 0 & tangentslope == 0
+                tangentj = point1;
+                while tangentj < point2 & tangentslope == 0
+                    %disp(tangentj)
+                    %disp(-sqrt((radius*radius) - (tangenti*tangentj)*(tangenti*tangentj)) + centerx)
+
+                    %disp(tangentj*tangenti);
+                    %disp(sqrt(-(-tangentj + centerx)*(-tangentj + centerx) + radius*radius));
+
+
+                    if tangentj*tangenti < sqrt(-(-tangentj + centerx)*(-tangentj + centerx) + radius*radius)
+                        tangentslope = tangenti + 0.1;
+                        
+                    end 
+                    tangentj = tangentj + 1;
+                end 
+                tangenti = tangenti - 0.1;
+            end 
+
+            xtangent = 0:point2;
+            ytangent = tangentslope*xtangent;
+
+
+
+
+
+            
+            ax = nexttile(8);
+            hold on;
+            h = plot(xunit, yunit);
+            hold on;
+            h = plot(xtangent, ytangent);
+            xlabel('Normal Stress');
+            ylabel('Shear Stress');
+            title('Mohrs Circle');
+
+            % hold on
+            % ax = nexttile(8)
+            % h = plot(xtangent, ytangent);
+            % xlabel('Normal Stress');
+            % ylabel('Shear Stress');
+            % title('Mohrs Circle');
+            
+            axis([ax],[0 point2 0 point2]);
+
+        
+        
+
+           
+                if read_from_file == 0
+    
+                    cell_pressure = input_array(end-8)
+                    specific_gravity = input_array(end-7);
+                    pretest_dry_wt = input_array(end-6);
+                    posttest_dry_wt = input_array(end-5);
+                    water_content = input_array(end-4);
+                    posttest_moisture_content = input_array(end-3);
+                    posttest_dry_density = input_array(end-2);
+                    voidratio_as_poured = input_array(end-1);
+                    voidratio_critical_state = input_array(end);
+    
+    
+                else 
+                    cell_pressure = input("What is the cell pressure of the sample during shear?")
+
+                    calculation_yn = input("Input pre and post-test info directly, or input recorded data and calculate (freezing method only)? (0 = input directly, 1 = calculate)")
+
+                    specific_gravity = input("What is the soil's specific gravity?");
+
+                    if calculation_yn == 1
+    
+                        pretest_prepour_wt = input("Before testing, what is the weight of pan and soil before pour in grams?");
+                        pretest_postpour_wt = input("Before testing, what is the weight of pan and soil after pour in grams?");
+                        membrane_wt = input("Before testing, what is the weight of the membrane in grams?");
+        
+                        posttest_pan_wt = input("After testing, what is the weight of the pan used in grams?");
+                        posttest_frozen_wt = input("After testing, what is the weight of the pan, frozen sample, and membrane in grams?");
+                        posttest_oven_wt = input("After testing, what is the weight of the pan and dry soil in grams?");
+                    
+                        pretest_dry_wt = pretest_prepour_wt - pretest_postpour_wt;
+                        posttest_dry_wt = posttest_oven_wt - posttest_pan_wt;
+                        water_content = posttest_frozen_wt - posttest_oven_wt - membrane_wt;
+                        posttest_moisture_content = 100*water_content/(water_content + posttest_dry_wt);
+                        posttest_dry_density = 1000*posttest_dry_wt/(sample_volume_preshear);
+                        voidratio_as_poured = (1/posttest_dry_density - 1/(1000*specific_gravity))*specific_gravity*1000;
+                        voidratio_critical_state = specific_gravity*posttest_moisture_content/100;
+                    else 
+                        pretest_dry_wt = input("What is the pre-test dry weight in grams?");
+                        posttest_dry_wt = input("What is the post-test dry weight in grams?");
+                        water_content = input("What is the water content in grams?");
+                        posttest_moisture_content = input("What is the moisture content in percent?");
+                        posttest_dry_density = input("What is the dry density in kilograms per cubic meter?");
+                        voidratio_as_poured = input("What is the as-poured void ratio?");
+                        voidratio_critical_state = input("What is the critical state void ratio?");
+                    end 
+                    input_array(end+1) = cell_pressure;
+                    input_array(end+1) = specific_gravity;
+                    input_array(end+1) = pretest_dry_wt;
+                    input_array(end+1) = posttest_dry_wt;
+                    input_array(end+1) = water_content;
+                    input_array(end+1) = posttest_moisture_content;
+                    input_array(end+1) = posttest_dry_density;
+                    input_array(end+1) = voidratio_as_poured;
+                    input_array(end+1) = voidratio_critical_state;
+    
+                    save('input_parameters.mat', 'input_array');
+                end
+    
+
+
+            %set(fig,'Units',"pixels")
+
+
+
+            % Values = ["Specimen";"Initial Height";"Initial Diameter";"Specific Gravity";"Pretest Dry Weight";"Posttest Dry Weight";"Water Content";"Moisture Content";"Posttest Dry Density";"As Poured Void Ratio";"Critical State Void Ratio";"B-Value";"Pore Pressure after B-Check";"Cell Pressure";"Effective Stress"]
+            % annotationTable = table(Values)
+            % Specimen1 = [1; sample_height; sample_diameter; specific_gravity; pretest_dry_wt; posttest_dry_wt; water_content; posttest_moisture_content; posttest_dry_density; voidratio_as_poured; voidratio_critical_state; 0; 0; 0; 0]
+            % annotationTable.FirstSpecimen = Specimen1
+            % uit = uitable(fig,"Data",annotationTable);
+    
+
+            
+
+            createTablerow('Test ID', string(test_ID), 0, comparison_i)
+            createTablerow('sample height (mm)', string(round(sample_height, 3)), 1, comparison_i)
+            createTablerow('sample diameter (mm)', string(round(sample_diameter_w_membrane, 3)), 2, comparison_i)
+            createTablerow('sample area (mm^2)', string(round(sample_area_preshear, 1)), 3, comparison_i)
+            createTablerow('sample volume (mm^3)', string(round(sample_volume_preshear, 2)), 4, comparison_i)
+            createTablerow('specific gravity', string(round(specific_gravity, 3)), 5, comparison_i)
+            createTablerow('pretest dry weight (g)', string(round(pretest_dry_wt, 2)), 6, comparison_i)
+            createTablerow('posttest dry weight (g)', string(round(posttest_dry_wt, 2)), 7, comparison_i)
+            createTablerow('water content (g)', string(round(water_content, 3)), 8, comparison_i)
+            createTablerow('moisture content (%)', string(round(posttest_moisture_content, 3)), 9, comparison_i)
+            createTablerow('dry density (kg/m^3)', string(round(posttest_dry_density, 1)), 10, comparison_i)
+            createTablerow('as poured void ratio', string(round(voidratio_as_poured, 4)), 11, comparison_i)
+            createTablerow('critical state void ratio', string(round(voidratio_critical_state, 4)), 12, comparison_i)
+            createTablerow('cell pressure', string(cell_pressure), 13, comparison_i)
+
+
+
+
+        comparison_i = comparison_i + 1;
+    end 
+
+    %if comparison_amount == 1
+    %    set(gcf, 'Position',  [100, 100, 1000, 700]);
+    %else 
+        set(gcf, 'Position',  [100, 100, 1000, 700]);
+    %end
+
+    set(gcf,'PaperPositionMode','auto');         
+    set(gcf,'PaperOrientation','landscape')
+
+    savefig('fullplot.fig');
+    saveas(gcf,'exportedplot.png');
+    saveas(gcf,'exportedplot2.pdf');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    %end of triaxial test code
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+else %%biaxial tests:
+    
+    %%for consolidation, find each instance where 'vertical force
+    %%'setpoint' = 0; these are different consolidation stages.
+    disp("Choose a .txt biaxial Consolidation file...")
+    file = uigetfile();
+    ConsolidationTable_total = readtable(file)
+    
+    read_from_file = input("Read an input parameter file or start from scratch? (0 = read a file, 1 = do not)")
+
+    %fileparts(file)
+
+    if read_from_file == 0
+        disp("Choose a .mat input parameter file...")
+        file = uigetfile('*.mat');
+        load(file, 'input_array')
+        sample_height = input_array(1);
+        sample_width = input_array(2);
+        sample_length = input_array(3);
+        consolidation_number_of_stages = input_array(4);
+    else 
+        sample_height = input("What is the sample height in mm?")
+        sample_width = input("What is the sample width in mm? (measurement that is ~40 mm)")
+        sample_length = input("What is the sample length in mm? (measurement that is ~100 mm)")
+        consolidation_number_of_stages = input("How many consolidation stages?")
+        input_array = [sample_height, sample_width, sample_length, consolidation_number_of_stages]
+    end 
+
+
+
+
+
+    figure;
+    tcl=tiledlayout(3,3);
+    sample_height_preshear = sample_height;
+    sample_volume_preshear = (sample_width)*(sample_height)*sample_length/1000 %units are mL, not cubic mm  %PI()*(B57/2)^2*B56/1000;
+    
+
+
+    %%all stuff below is being actively edited
+    savedplace = 1
+    j = 0 ;
+    while(j < consolidation_number_of_stages)
+
+        if read_from_file == 0
+            %consolidation_stage = input_array(4+j*4);%input("What stage number was consolidation " + string(j + 1) + "?")
+            consolidation_time = input_array(5+j*3);%input("How many seconds into the stage until consolidation starts? (Enter '0' to use the entire stage)")
+            slope_i_input = input_array(6+j*3);%input("How many seconds to use to find slope of tangent line? (minimum 2. typical value is 5 seconds)")
+            consolidation_duration = input_array(7+j*3)
+            %consolidation_autodock = input_array(7+j*4);%input("Is autodocking on? (0 = no, 1 = yes)")
+        else 
+            %consolidation_stage = input("What stage number was consolidation " + string(j + 1) + "?")
+            consolidation_time = input("How many seconds into the stage until consolidation starts? (Enter '0' to use the entire stage. Enter '-1' to automatically find value that generates the steepest t90 slope.)")
+            slope_i_input = input("How many seconds to use to find slope of tangent line? (minimum 2. Enter '-1' to automatically find value that generates the steepest t90 slope.)")
+            consolidation_duration = input("How many seconds did consolidation last? (usually 600, can check document in excel to verify. Enter '-1' to automatically find transition between consolidation stages.)")
+            %consolidation_autodock = input("Is autodocking on? (0 = no, 1 = yes)")
+            %input_array(end+1) = consolidation_stage
+            input_array(end+1) = consolidation_time
+            input_array(end+1) = slope_i_input
+            input_array(end+1) = consolidation_duration
+        end
+
+        
+
+
+
+        
+        ConsolidationTable2 = ConsolidationTable_total(savedplace:savedplace+consolidation_duration,:)%DataTable(DataTable :);
+        %this is unneeded but what is the 'size' of the table per
+        %stage?
+        % 
+        % i = 1
+        % while(i < consolidation_duration)
+        % 
+        % 
+        %     i = i + 1
+        % end 
+
+        savedplace = savedplace + consolidation_duration
+
+        i = 1;
+
+        % if consolidation_autodock == 1
+        %     while( abs(ConsolidationTable2.AxialDisplacement_mm_(i + 1) - ConsolidationTable2.AxialDisplacement_mm_(i)) < 0.1);
+        %         i = i + 1;
+        %     end
+        % end
+
+        consolidationtable2_autodock_value = i;
+
+        best_t90 = 99999999;
+        best_l = 0;
+        best_slope_i = 0;
+
+        if consolidation_time == -1
+            l = 0;
+            l_target = 10;
+        else 
+            l = consolidation_time;
+            l_target = consolidation_time + 1;
+        end 
+
+        %l = 0
+        while l < l_target %%for each possible consolidation_time...
+            disp('loading ' + string(l))
+       
+            ConsolidationTable = ConsolidationTable2([consolidationtable2_autodock_value+l+1:height(ConsolidationTable2)],:);
+
+
+            if slope_i_input == -1
+                slope_i = 4;
+                slope_i_target = 10;
+            else
+                slope_i = slope_i_input;
+                slope_i_target = slope_i + 1;
+            end 
+
+            while slope_i < slope_i_target
+                i = 1;
+                initial_i = i;
+                slope_y2 = sample_volume_preshear + (ConsolidationTable.VolumeChange(slope_i) - ConsolidationTable.VolumeChange(initial_i));
+                slope_y1 = sample_volume_preshear;
+                slope = (slope_y2 - slope_y1)/(sqrt(slope_i-1) - sqrt(initial_i-1));
+
+                while(i < height(ConsolidationTable) + 1);
+                    %sqrt time
+                    ConsolidationTable.Time(i) = sqrt(i - 1);
+                    %height change
+                    %InitialAreaUnderAnisotropicConditions
+                    %(L_CVolume_mm__)
+                    ConsolidationTable.InitialAreaUnderAnisotropicConditions(i) = sample_height_preshear - ConsolidationTable.VerticalDisplacement(i) + ConsolidationTable.VerticalDisplacement(initial_i);
+                    %volume change
+                    %InitialHeightUnderAnisotropicConditions
+                    %LocalAxial1_mm_
+                    ConsolidationTable.InitialHeightUnderAnisotropicConditions(i) = sample_volume_preshear + (ConsolidationTable.VolumeChange(i) - ConsolidationTable.VolumeChange(initial_i));  %sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(1);
+                    %area
+                    %DisplacementUnderAnisotropicConditions
+                    %LocalAxial2_mm_
+                    ConsolidationTable.DisplacementUnderAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(i)*1000/ConsolidationTable.L_CVolume_mm__(i);
+                    %tangent line
+                    %AreaOfSpecimenAnisotropicConditions
+                    %LocalRadial_mm_
+                    ConsolidationTable.AreaOfSpecimenAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(1) + ConsolidationTable.Time(i)*slope;
+                    %t90 line
+                    %VerticalStressUnderAnisotropicConditions
+                    %BasePressure_kPa_
+                    ConsolidationTable.VerticalStressUnderAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(1) + ConsolidationTable.Time(i)*slope/1.15;
+                    i = i + 1;
+                end
+                
+                i = i - 1;
+        
+                sample_area_preshear = ConsolidationTable.DisplacementUnderAnisotropicConditions(i); %all that matters is that this takes the end-most area of the last consolidation stage
+                
+                
+                %%go backwards from the end of the graph to the start to find POI
+                %%of t90 line.
+        
+                i = i - 1;
+
+                t90 = 0;
+        
+                while(i > 0);
+        
+                    if ConsolidationTable.VerticalStressUnderAnisotropicConditions(i) > ConsolidationTable.InitialHeightUnderAnisotropicConditions(i)
+                        t90 = 0.5*(ConsolidationTable.Time(i)*ConsolidationTable.Time(i) + ConsolidationTable.Time(i+1)*ConsolidationTable.Time(i+1));
+                        calculated_shear_rate = 4*60/(10*t90);
+                        i = 1;
+                    else 
+                        %t90 line
+                        ConsolidationTable.VerticalStressUnderAnisotropicConditions(i+1) = "";%ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                        %tangent line
+                        ConsolidationTable.AreaOfSpecimenAnisotropicConditions(i+1) = "";
+                    end 
+                    i = i - 1;
+                end
+
+                if t90 < best_t90
+                    best_t90 = t90;
+                    best_l = l;
+                    best_slope_i = slope_i;
+
+                end
+
+                slope_i = slope_i + 1;
+            end
+
+            l = l + 1;
+        end
+
+
+
+
+        %using best t90 parameters, generate the final set of data.
+
+
+
+
+
+
+        ConsolidationTable = ConsolidationTable2([consolidationtable2_autodock_value+0+1:height(ConsolidationTable2)],:);
+
+        slope_i = best_slope_i + best_l
+
+        % i = 1;
+        % initial_i = i;
+        % slope_y2 = sample_volume_preshear + (ConsolidationTable.VolumeChange(slope_i) - ConsolidationTable.VolumeChange(initial_i))/1000;
+        % slope_y1 = sample_volume_preshear
+        % slope = (slope_y2 - slope_y1)/(sqrt(slope_i-1) - sqrt(initial_i-1));
+
+        i = 1;
+        initial_i = best_l+1;
+        slope_y2 = sample_volume_preshear + (ConsolidationTable.VolumeChange(slope_i) - ConsolidationTable.VolumeChange(initial_i))/1000;
+        slope_y1 = sample_volume_preshear
+        slope = (slope_y2 - slope_y1)/(sqrt(best_slope_i)); %its complicated why 'best_slope_i' is used here, basically its cause the table still having pre-consol values messes up sqrts
+
+
+        %this entire block is duplicated twice, could be its own
+        %function
+        while(i < height(ConsolidationTable) + 1);
+           
+            %height change
+            %InitialAreaUnderAnisotropicConditions
+            %(L_CVolume_mm__)
+            ConsolidationTable.InitialAreaUnderAnisotropicConditions(i) = sample_height_preshear - ConsolidationTable.VerticalDisplacement(i) + ConsolidationTable.VerticalDisplacement(initial_i);
+            %volume change
+            %InitialHeightUnderAnisotropicConditions
+            %LocalAxial1_mm_
+            ConsolidationTable.InitialHeightUnderAnisotropicConditions(i) = sample_volume_preshear + (ConsolidationTable.VolumeChange(i) - ConsolidationTable.VolumeChange(initial_i));  %sample_height_preshear - ConsolidationTable.AxialDisplacement_mm_(i) + ConsolidationTable.AxialDisplacement_mm_(1);
+            %area
+            %DisplacementUnderAnisotropicConditions
+            %LocalAxial2_mm_
+            ConsolidationTable.DisplacementUnderAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(i)*1000/ConsolidationTable.L_CVolume_mm__(i);
+
+            
+            %sqrt time
+            if (i - 1 - best_l) > -1
+
+                %sqrt time
+                ConsolidationTable.Time(i) = sqrt(i - 1 - best_l);
+
+                %tangent line
+                %AreaOfSpecimenAnisotropicConditions
+                %LocalRadial_mm_
+                ConsolidationTable.AreaOfSpecimenAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(initial_i) + ConsolidationTable.Time(i)*slope;
+                %t90 line
+                %VerticalStressUnderAnisotropicConditions
+                %BasePressure_kPa_
+                ConsolidationTable.VerticalStressUnderAnisotropicConditions(i) = ConsolidationTable.InitialHeightUnderAnisotropicConditions(initial_i) + ConsolidationTable.Time(i)*slope/1.15;
+                
+
+
+            else 
+                %sqrt time
+                ConsolidationTable.Time(i) = 0;
+
+                %tangent line
+                %AreaOfSpecimenAnisotropicConditions
+                %LocalRadial_mm_
+                ConsolidationTable.AreaOfSpecimenAnisotropicConditions(i) = sample_volume_preshear;%ConsolidationTable.InitialHeightUnderAnisotropicConditions(initial_i) + ConsolidationTable.Time(i)*slope;
+                %t90 line
+                %VerticalStressUnderAnisotropicConditions
+                %BasePressure_kPa_
+                ConsolidationTable.VerticalStressUnderAnisotropicConditions(i) = sample_volume_preshear;%ConsolidationTable.InitialHeightUnderAnisotropicConditions(initial_i) + ConsolidationTable.Time(i)*slope/1.15;
+                
+
+            end 
+            
+            
+            i = i + 1;
+        end
+        
+        i = i - 1;
+
+        sample_area_preshear = ConsolidationTable.DisplacementUnderAnisotropicConditions(i); %all that matters is that this takes the end-most area of the last consolidation stage
+        %%go backwards from the end of the graph to the start to find POI
+        %%of t90 line.
+
+
+        sample_height_preshear = InitialAreaUnderAnisotropicConditions(i)
+        sample_volume_preshear = InitialHeightUnderAnisotropicConditions(i)
+
+
+
+        t90 = 0;
+
+        i = i - 1
+
+        while(i > 0);
+
+            if ConsolidationTable.VerticalStressUnderAnisotropicConditions(i) > ConsolidationTable.InitialHeightUnderAnisotropicConditions(i)
+                t90 = 0.5*(ConsolidationTable.Time(i)*ConsolidationTable.Time(i) + ConsolidationTable.Time(i+1)*ConsolidationTable.Time(i+1));
+                calculated_shear_rate = 4*60/(10*t90)
+                i = 1
+            else 
+                %t90 line
+                ConsolidationTable.VerticalStressUnderAnisotropicConditions(i+1) = "";%ConsolidationTable.LocalAxial1_mm_(1) + ConsolidationTable.TimeSinceStartOfStage_s_(i)*slope/1.15;
+                %tangent line
+                ConsolidationTable.AreaOfSpecimenAnisotropicConditions(i+1) = "";
+            end 
+            i = i - 1;
+        end
+
+        disp("values for this consol. stage:")
+        disp(string(calculated_shear_rate))
+        disp(string(t90))
+        scatter(ConsolidationTable, "Time", ["InitialHeightUnderAnisotropicConditions", "AreaOfSpecimenAnisotropicConditions", "VerticalStressUnderAnisotropicConditions"])
+        xlabel('Square Root of Time (s^1^/^2)');
+        ylabel('Volume Change (mm^3)');
+        title('Consolidation Graph, stage ' + string(j + 1));
+
+        savefig('Consol' + string(j + 1) + '.fig')
+
+        close
+
+        j = j + 1;
+    end
+
+
+
+
+    disp("Choose a .txt biaxial Constant strain rate file...")
+    file = uigetfile;
+    ShearTable = readtable(file)
+
+    i = 1;
+    while(i < height(ShearTable) + 1)
+
+        %%height
+        ShearTable.L_CPressure_kPa_(i) = sample_height_preshear - ShearTable.AxialDisplacement_mm_(i) + ShearTable.AxialDisplacement_mm_(1);
+        %strain
+        ShearTable.L_CVolume_mm__(i) = -100*(ShearTable.L_CPressure_kPa_(i) - ShearTable.L_CPressure_kPa_(1))/sample_height_preshear;
+        %area
+        ShearTable.LocalAxial1_mm_(i) = sample_area_preshear/(1 - ShearTable.L_CVolume_mm__(i)/100);
+        %sigma 3'
+        ShearTable.LocalAxial2_mm_(i) = ShearTable.RadialPressure_kPa_(i) - ShearTable.PorePressure_kPa_(i);
+        %sigma 1'
+        ShearTable.LocalRadial_mm_(i) = 1000000*(ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000 + ShearTable.LoadCell_kN_(i))/ShearTable.LocalAxial1_mm_(i) - ShearTable.PorePressure_kPa_(i);
+        %difference in sigma 3' and sigma 1'
+        ShearTable.BasePressure_kPa_(i) = ShearTable.LocalRadial_mm_(i) - ShearTable.LocalAxial2_mm_(i);
+        %difference in pore pressure
+        ShearTable.BaseVolume_mm__(i) = ShearTable.PorePressure_kPa_(i) - ShearTable.PorePressure_kPa_(1);
+
+
+        %sigma 1'/sigma 3'
+        ShearTable.BackDifferentialPressure_kPa_(i) = ShearTable.LocalRadial_mm_(i)/ShearTable.LocalAxial2_mm_(i);%(1000000*ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000)/ShearTable.LocalAxial1_mm_(i);
+       
+        
+        %mean effective stress
+        ShearTable.AxialDisplacement2_mm_(i) = (2*ShearTable.LocalRadial_mm_(i) + ShearTable.LocalAxial2_mm_(i))/3;%(ShearTable.RadialPressure_kPa_(i)*(sample_volume_preshear/ShearTable.L_CPressure_kPa_(i))/1000);
+
+        i = i + 1;
+    end
+
+
+
+   
+
+    nexttile
+    plot(ShearTable, "L_CVolume_mm__", "BasePressure_kPa_")
+    %line("L_CVolume_mm__", "BasePressure_kPa_")
+    xlabel('Vertical Strain (%)');
+    ylabel('Deviator Stress (kPa)');
+    title('Deviator Stress vs Vertical Strain');
+    savefig('sigma_difference.fig')
+    %close
+    nexttile
+    plot(ShearTable, "L_CVolume_mm__", "BaseVolume_mm__")
+    xlabel('Vertical Strain (%)');
+    ylabel('Pore Pressure Change (kPa)');
+    title('Pore Pressure Change vs Vertical Strain');
+    savefig('pore pressure.fig')
+    %close
+    nexttile
+    plot(ShearTable, "L_CVolume_mm__", "BackDifferentialPressure_kPa_")
+    xlabel('Vertical Strain (%)');
+    ylabel('Sigma 1/Sigma 3 (-)');
+    title('Stress Ratio vs Vertical Strain');
+    savefig('sigma ratio.fig')
+    %close
+    nexttile
+    plot(ShearTable, "AxialDisplacement2_mm_", "BasePressure_kPa_")
+    xlabel('Mean Effective Stress (kPa)');
+    ylabel('Deviator Stress (kPa)');
+    title('P-Q diagram');
+    savefig('pq plot.fig')
+    %close
+
+
+    % openfig('Consol1.fig');
+    % ax1=gca;
+    % openfig('Consol2.fig')
+    % ax2=gca;
+    % openfig('sigma_difference.fig');
+    % ax3=gca;
+    % openfig('pore pressure.fig');
+    % ax4=gca;
+    % openfig('sigma ratio.fig');
+    % ax5=gca;
+    % openfig('pq plot.fig');
+    % ax6=gca;
+    % openfig('pq plot.fig');
+    % ax7=gca;
+
+
+    % ax1.Parent=tcl;
+    % ax1.Layout.Tile=1;
+    % ax2.Parent=tcl;
+    % ax2.Layout.Tile=2;
+    % ax3.Parent=tcl;
+    % ax3.Layout.Tile=3;
+    % ax4.Parent=tcl;
+    % ax4.Layout.Tile=4;
+    % ax5.Parent=tcl;
+    % ax5.Layout.Tile=5;
+    % ax6.Parent=tcl;
+    % ax6.Layout.Tile=6;
+    % ax7.Parent=tcl;
+    % ax7.Layout.Tile=7;
+
+
+
+        if read_from_file == 0
+
+            specific_gravity = input_array(end-7)
+            pretest_dry_wt = input_array(end-6)
+            posttest_dry_wt = input_array(end-5)
+            water_content = input_array(end-4)
+            posttest_moisture_content = input_array(end-3)
+            posttest_dry_density = input_array(end-2)
+            voidratio_as_poured = input_array(end-1)
+            voidratio_critical_state = input_array(end)
+
+
+        else 
+            specific_gravity = input("What is the soil's specific gravity?")
+            pretest_prepour_wt = input("Before testing, what is the weight of pan and soil before pour in grams?")
+            pretest_postpour_wt = input("Before testing, what is the weight of pan and soil after pour in grams?")
+            membrane_wt = input("Before testing, what is the weight of the membrane in grams?")
+
+            posttest_pan_wt = input("After testing, what is the weight of the pan used in grams?")
+            posttest_frozen_wt = input("After testing, what is the weight of the pan, frozen sample, and membrane in grams?")
+            posttest_oven_wt = input("After testing, what is the weight of the pan and dry soil in grams?")
+        
+            pretest_dry_wt = pretest_prepour_wt - pretest_postpour_wt
+            posttest_dry_wt = posttest_oven_wt - posttest_pan_wt
+            water_content = posttest_frozen_wt - posttest_oven_wt - membrane_wt
+            posttest_moisture_content = 100*water_content/(water_content + posttest_dry_wt)
+            posttest_dry_density = 1000*posttest_dry_wt/(sample_volume_preshear)
+            voidratio_as_poured = (1/posttest_dry_density - 1/(1000*specific_gravity))*specific_gravity*1000
+            voidratio_critical_state = specific_gravity*posttest_moisture_content/100
+
+            input_array(end+1) = specific_gravity
+            input_array(end+1) = pretest_dry_wt
+            input_array(end+1) = posttest_dry_wt
+            input_array(end+1) = water_content
+            input_array(end+1) = posttest_moisture_content
+            input_array(end+1) = posttest_dry_density
+            input_array(end+1) = voidratio_as_poured
+            input_array(end+1) = voidratio_critical_state
+
+            save('input_parameters.mat', 'input_array');
+        end
+
+
+    %disp(string(sample_height))
+
+    annotation('textbox', [0.05, 0.05, 0, 0], 'string', 'sample height (mm) ' + string(sample_height), 'FitBoxToText','on')
+    annotation('textbox', [0.05, 0.1, 0, 0], 'string', 'sample diameter (mm) ' + string(sample_diameter), 'FitBoxToText','on')
+    annotation('textbox', [0.05, 0.15, 0, 0], 'string', 'sample area (mm^2) ' + string(sample_area_preshear), 'FitBoxToText','on')
+    annotation('textbox', [0.05, 0.2, 0, 0], 'string', 'sample volume (mL) ' + string(sample_volume_preshear), 'FitBoxToText','on')
+    annotation('textbox', [0.05, 0.25, 0, 0], 'string', 'specific gravity ' + string(specific_gravity), 'FitBoxToText','on')
+    annotation('textbox', [0.05, 0.3, 0, 0], 'string', 'pretest dry weight (g) ' + string(pretest_dry_wt), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.05, 0, 0], 'string', 'posttest dry weight (g) ' + string(posttest_dry_wt), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.1, 0, 0], 'string', 'water content (g) ' + string(water_content), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.15, 0, 0], 'string', 'posttest moisture content (%) ' + string(posttest_moisture_content), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.2, 0, 0], 'string', 'posttest dry density (kg/m^3) ' + string(posttest_dry_density), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.25, 0, 0], 'string', 'as poured void ratio ' + string(voidratio_as_poured), 'FitBoxToText','on')
+    annotation('textbox', [0.25, 0.3, 0, 0], 'string', 'critical state void ratio ' + string(voidratio_critical_state), 'FitBoxToText','on')
+
+    set(gcf, 'Position',  [100, 100, 1000, 1000])
+    savefig('fullplot.fig')
+    saveas(gcf,'exportedplot.png')
+    saveas(gcf,'exportedplot2.pdf')
+
+
+
+
+
+
+
+
+end 
+
+
+
+
+
+
+
+
+
